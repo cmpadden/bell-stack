@@ -28,6 +28,28 @@ const event = (type: string, id: string, data: Record<string, unknown> = {}) => 
 });
 
 describe("durable Eve task state", () => {
+  it("projects v27 deliveries, waits, and settled outcomes without losing the wait reason", () => {
+    const apply = (state: DurableTaskRecord, type: string, data: Record<string, unknown> = {}) =>
+      applyTaskEvent(state, event(type, type, data), "session_fixture");
+    let state = apply(empty(), "delivery.consumed", { parts: [{ type: "text", text: "Research durable agents" }] });
+    expect(state.title).toBe("Research durable agents");
+    state = apply(state, "model.started");
+    expect(state).toMatchObject({ status: "running", activeStep: "model step" });
+    state = apply(state, "interaction.opened", { request: { kind: "question", prompt: "Enter OTP code" } });
+    state = apply(state, "turn.paused");
+    expect(state).toMatchObject({ status: "waiting_for_user", waitReason: "otp" });
+    state = apply(state, "interaction.settled", { outcome: "accepted" });
+    expect(state).toMatchObject({ status: "running", activeStep: "resuming" });
+    state = apply(state, "turn.settled", { outcome: "completed" });
+    expect(state.status).toBe("idle");
+    state = apply(state, "session.ended", { outcome: "completed" });
+    expect(state.status).toBe("complete");
+  });
+  it.each([["turn.settled", "failed", "failed"], ["turn.settled", "cancelled", "canceled"], ["session.ended", "failed", "failed"]])(
+    "projects %s with %s outcome", (type, outcome, status) => {
+      expect(applyTaskEvent(empty(), event(type, "settled", { outcome }), "session_fixture").status).toBe(status);
+    },
+  );
   it("keeps a Context naming hint without copying Eve's conversation history", () => {
     let state = initializeTask(empty(), "session_fixture", "2026-09-05T00:00:00.000Z");
     state = applyTaskEvent(

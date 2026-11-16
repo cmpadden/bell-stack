@@ -12,7 +12,7 @@ export const checkoutInput = z.strictObject({
 export type CheckoutInput = z.infer<typeof checkoutInput>;
 const request = z.object({
   id: z.string(), status: z.string(), merchant_url: z.string().url(), amount: z.number().int().positive(),
-  currency: z.string(), expires_at: z.number().optional(), credential_type: z.string().optional(),
+  currency: z.string(), expires_at: z.iso.datetime().optional(), credential_type: z.string().optional(),
 });
 const address = z.object({ name: z.string(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), postal_code: z.string().optional(), country: z.string() });
 const credentials = z.object({
@@ -31,7 +31,7 @@ export function paymentOrigins(value: unknown, input: CheckoutInput): string[] {
   const data = parsed.data;
   if (data.id !== input.id || data.status !== "approved" || data.amount !== input.amount || data.currency.toLowerCase() !== input.currency
     || (data.credential_type && data.credential_type !== input.credential)
-    || (data.expires_at !== undefined && data.expires_at * 1000 <= Date.now()))
+    || (data.expires_at !== undefined && Date.parse(data.expires_at) <= Date.now()))
     throw new Error("The current Link approval does not match this checkout. Verify the existing request before proceeding.");
   const merchant = httpsOrigin(data.merchant_url);
   const configured = z.record(z.string(), z.array(z.string())).parse(JSON.parse(process.env.LINK_CHECKOUT_ORIGINS ?? "{}"));

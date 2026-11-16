@@ -5,7 +5,7 @@ const input: CheckoutInput = { id: "spend_fixture", amount: 100, currency: "usd"
 const approved = { id: input.id, status: "approved", amount: 100, currency: "usd", merchant_url: "https://merchant.example/item", credential_type: "card" };
 afterEach(() => vi.unstubAllEnvs());
 describe("approved Link payment contract", () => {
-  it.each([{ status: "pending_approval" }, { status: "canceled" }, { amount: 101 }, { currency: "eur" }, { id: "other" }, { credential_type: "link_pay_token" }, { expires_at: 1 }])("refuses mismatched or expired approval: %j", change => {
+  it.each([{ status: "pending_approval" }, { status: "canceled" }, { amount: 101 }, { currency: "eur" }, { id: "other" }, { credential_type: "link_pay_token" }, { expires_at: "2000-01-01T00:00:00Z" }])("refuses mismatched or expired approval: %j", change => {
     expect(() => paymentOrigins({ ...approved, ...change }, input)).toThrow("approval");
   });
   it("derives frame origins only from the approved merchant and server configuration", () => {
@@ -13,6 +13,11 @@ describe("approved Link payment contract", () => {
     expect(paymentOrigins(approved, input)).toEqual(["https://merchant.example", "https://payments.example"]);
     expect(() => paymentOrigins({ ...approved, merchant_url: "http://merchant.example" }, input)).toThrow();
     expect(() => paymentOrigins({ ...approved, merchant_url: "https://user:pass@merchant.example" }, input)).toThrow();
+  });
+  it("accepts an unexpired ISO timestamp and rejects malformed expiry metadata", () => {
+    expect(paymentOrigins({ ...approved, expires_at: "2099-01-01T00:00:00Z" }, input)).toEqual(["https://merchant.example"]);
+    for (const expires_at of [1, "not-a-date"])
+      expect(() => paymentOrigins({ ...approved, expires_at }, input)).toThrow("metadata");
   });
   it("maps requested card fields and rejects expired credentials", () => {
     expect(paymentValues({ card: { number: "synthetic-number", exp_month: 3, exp_year: 2031 } }, input)).toEqual(["synthetic-number", "03/31"]);

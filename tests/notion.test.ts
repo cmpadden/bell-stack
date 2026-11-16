@@ -280,9 +280,10 @@ it("omits unsupported callers and checks the stored grant before tools can reuse
   const session = { id: "test", auth: { current: {
     principalType: "user" as const, principalId: "operator", issuer: "bell:operator", authenticator: "http-basic", attributes: {},
   } } };
-  const resolver = definition.events["turn.started"]!;
-  expect(await resolver({}, { session: { ...session, auth: { current: { principalType: "runtime" } } } } as never)).toBeNull();
-  const connection = await resolver({}, { session, channel: {} } as never);
+  const { dynamicEvaluate } = await import("../node_modules/eve/dist/src/dynamic/definition.js");
+  const resolver = dynamicEvaluate(definition);
+  expect(await resolver({ session: { ...session, auth: { current: { principalType: "runtime" } } } } as never)).toBeNull();
+  const connection = await resolver({ session, channel: {} } as never);
   if (!connection || !("url" in connection) || typeof connection.approval !== "function") throw new Error("Expected an MCP connection with approval policy");
   const f = fixture();
   await authorize(f);
@@ -300,7 +301,7 @@ it("omits unsupported callers and checks the stored grant before tools can reuse
     status.mockRestore();
   } finally { service.mockRestore(); }
   vi.stubEnv("NOTION_ENABLED", "false");
-  expect(await resolver({}, { session, channel: {} } as never)).toBeNull();
+  expect(await resolver({ session, channel: {} } as never)).toBeNull();
 });
 
 it("validates the personal Notion connection through Eve's runtime resolver", async () => {
@@ -311,7 +312,8 @@ it("validates the personal Notion connection through Eve's runtime resolver", as
     { principalType: "user", principalId: "operator", issuer: "bell:operator", authenticator: "http-basic", attributes: {} },
     { principalType: "user", principalId: "linq:sender", issuer: "linq", authenticator: "linq-message", attributes: {} },
   ]) {
-    const value = await definition.events["turn.started"]!({}, { session: { id: "test", auth: { current } }, channel: {} } as never);
+    const { dynamicEvaluate } = await import("../node_modules/eve/dist/src/dynamic/definition.js");
+    const value = await dynamicEvaluate(definition)({ session: { id: "test", auth: { current } }, channel: {} } as never);
     const resolved = resolveDynamicConnectionValue(value, {
       connectionName: "notion", logicalPath: "connections/notion.ts", sourceId: "notion-test", sourceKind: "module",
     });

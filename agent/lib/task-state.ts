@@ -1,4 +1,5 @@
 import { defineState } from "eve/context";
+import { z } from "zod";
 
 import type { BrowserProxyLocation, BrowserState } from "../../server/browser/types.js";
 
@@ -76,11 +77,21 @@ export function applyTaskEvent(
   record: DurableTaskRecord,
   event: {
     type: string;
-    data?: Record<string, unknown>;
+    data?: unknown;
     meta?: { id?: string; at?: string };
   },
   sessionId: string,
 ): DurableTaskRecord {
+  const data = z.record(z.string(), z.unknown()).parse(event.data ?? {});
+  const aliases: Record<string, string> = {
+    "delivery.consumed": "message.received",
+    "model.started": "step.started",
+    "interaction.opened": "input.requested",
+    "interaction.settled": "input.resolved",
+  };
+  let type = aliases[event.type] ?? event.type;
+  if (event.type === "turn.settled") type = `turn.${data.outcome}`;
+  if (event.type === "session.ended") type = `session.${data.outcome}`;
   const id = event.meta?.id,
     at = event.meta?.at ?? new Date().toISOString();
   let next = initializeTask(record, sessionId, at);
@@ -90,9 +101,13 @@ export function applyTaskEvent(
     processedEventIds: id ? [...next.processedEventIds, id].slice(-2_000) : next.processedEventIds,
     updatedAt: at,
   };
-  if (event.type === "message.received") {
+  if (type === "message.received") {
     if (next.title === "New task") {
-      const text = safeText(event.data?.message ?? event.data?.text);
+      const parts = z.array(z.object({ type: z.string(), text: z.string().optional() })).safeParse(data.parts);
+      const message = parts.success
+        ? parts.data.filter((part) => part.type === "text").map((part) => part.text ?? "").join(" ")
+        : undefined;
+      const text = safeText(data.message ?? data.text ?? message);
       if (text) next = { ...next, title: text.slice(0, 64) };
     }
     // A reply after handoff permits a fresh observation of the existing page.
@@ -102,7 +117,7 @@ export function applyTaskEvent(
       if (next.captcha?.status === "errored" || next.captcha?.status === "timed_out")
         next = { ...next, captcha: { ...next.captcha, status: "idle" } };
     }
-  } else if (event.type === "turn.started")
+  } else if (type === "turn.started")
     next = captchaBlocksGeneric(next)
       ? next
       : {
@@ -111,25 +126,27 @@ export function applyTaskEvent(
           activeStep: "agent turn",
           waitReason: undefined,
         };
-  else if (event.type === "step.started")
+  else if (type === "step.started")
     next = captchaBlocksGeneric(next)
       ? next
       : { ...next, status: "running", activeStep: "model step" };
-  else if (event.type === "input.requested")
+  else if (type === "input.requested")
     next = {
       ...next,
       status: "waiting_for_user",
       activeStep: "waiting for user",
-      waitReason: classifyWait(event.data),
+      waitReason: classifyWait(data),
     };
-  else if (event.type === "input.resolved")
+  else if (type === "input.resolved")
     next = {
       ...next,
       status: "running",
       activeStep: "resuming",
       waitReason: undefined,
     };
-  else if (event.type === "turn.completed" || event.type === "session.waiting")
+  else if (type === "turn.paused")
+    next = { ...next, status: "waiting_for_user", activeStep: "waiting for user", waitReason: next.waitReason ?? "other" };
+  else if (type === "turn.completed" || type === "session.waiting")
     next = captchaBlocksGeneric(next)
       ? next
       : {
@@ -138,16 +155,16 @@ export function applyTaskEvent(
           activeStep: undefined,
           waitReason: undefined,
         };
-  else if (event.type === "turn.failed" || event.type === "session.failed")
+  else if (type === "turn.failed" || type === "session.failed")
     next = { ...next, status: "failed", activeStep: undefined };
-  else if (event.type === "turn.cancelled")
+  else if (type === "turn.cancelled")
     next = closeTaskBrowser({
       ...next,
       status: "canceled",
       activeStep: undefined,
       waitReason: undefined,
     });
-  else if (event.type === "session.completed")
+  else if (type === "session.completed")
     next = { ...next, status: "complete", activeStep: undefined };
   return next;
 }

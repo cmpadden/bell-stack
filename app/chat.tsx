@@ -2,7 +2,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEveAgent } from "eve/react";
-import { Client } from "eve/client";
+import { activeTurn, interactions } from "eve/events";
 import { useState } from "react";
 import { browserPreview } from "./projection";
 
@@ -19,16 +19,12 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
         window.history.replaceState(null, "", `/s/${encodeURIComponent(session.sessionId)}`);
     },
   });
-  const busy = agent.status === "submitted" || agent.status === "streaming";
+  const busy = activeTurn(agent.view) !== undefined;
   const waiting = busy || agent.status === "resuming" || retiring;
-  const preview = browserPreview(agent.events);
-  const pending = agent.data.messages
-    .flatMap((message) => message.parts)
-    .flatMap((part) => {
-      if (part.type !== "dynamic-tool" || part.state !== "approval-requested") return [];
-      const request = part.toolMetadata?.eve?.inputRequest;
-      return request ? [request] : [];
-    });
+  const preview = browserPreview(agent.messages);
+  const requests = interactions(agent.view);
+  const pending = requests.filter((item) => item.status === "open" && item.request.kind !== "sign-in");
+  const signIns = requests.filter((item) => item.request.kind === "sign-in");
   async function send(text: string) {
     if (!text.trim() || waiting) return;
     setError("");
@@ -44,10 +40,8 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
     setRetiring(true);
     setError("");
     try {
-      const activeSessionId = agent.session?.sessionId ?? sessionId;
-      if (activeSessionId)
-        await new Client({ host: "" }).sessions.attach(activeSessionId).reset();
-      agent.reset();
+      if (agent.session) await agent.end();
+      agent.newSession();
       setInput("");
       router.push("/");
     } catch {
@@ -89,27 +83,13 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
             Open demo site ↗
           </button>
           <div className="messages" aria-live="polite">
-            {agent.data.messages
+            {agent.messages
               .filter((message) => message.role === "user" || message.role === "assistant")
               .map((message) => (
                 <article key={message.id} className={message.role}>
                   <strong>{message.role === "user" ? "You" : "Bell"}</strong>
                   {message.parts.map((part, index) =>
-                    part.type === "text" ? <p key={index}>{part.text}</p>
-                      : part.type === "authorization" ? (
-                        <section key={index}>
-                          {part.state === "completed" ? (
-                            <p>{part.outcome === "authorized" ? `${part.displayName} connected.` : `${part.displayName} authorization ${part.outcome}.`}</p>
-                          ) : (
-                            <>
-                              <p>{part.description}</p>
-                              {part.authorization?.url && (
-                                <a href={part.authorization.url} target="_blank" rel="noopener noreferrer">Connect {part.displayName}</a>
-                              )}
-                            </>
-                          )}
-                        </section>
-                      ) : null,
+                    part.type === "text" ? <p key={index}>{part.text}</p> : null,
                   )}
                 </article>
               ))}
@@ -123,8 +103,24 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
               {" "}<button type="button" disabled={waiting} onClick={() => void newConversation()}>Start a fresh conversation</button>
             </p>
           )}
-          {pending.map((request) => (
-            <fieldset key={request.requestId}>
+          {signIns.map(({ request, interactionId, status, outcome }) => (
+            <section key={interactionId}>
+              {status === "open" ? (
+                <>
+                  <p>{request.prompt}</p>
+                  {(request.link?.url ?? request.signIn?.url) && (
+                    <a href={request.link?.url ?? request.signIn?.url} target="_blank" rel="noopener noreferrer">
+                      Connect {request.signIn?.displayName ?? request.signIn?.name}
+                    </a>
+                  )}
+                </>
+              ) : (
+                <p>{request.signIn?.displayName ?? request.signIn?.name} {outcome === "accepted" ? "connected." : `authorization ${outcome}.`}</p>
+              )}
+            </section>
+          ))}
+          {pending.map(({ request, interactionId }) => (
+            <fieldset key={interactionId}>
               <legend>{request.prompt}</legend>
               {request.options?.map((option) => (
                 <button
@@ -132,7 +128,7 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
                   type="button"
                   onClick={() =>
                     void agent
-                      .respond([{ requestId: request.requestId, optionId: option.id }])
+                      .respond([{ interactionId, optionId: option.id }])
                       .catch(() => setError("Reply failed. Please retry."))
                   }
                 >
@@ -148,12 +144,12 @@ export default function Chat({ sessionId, demoUrl }: { sessionId?: string; demoU
                     ).trim();
                     if (text)
                       void agent
-                        .respond([{ requestId: request.requestId, text }])
+                        .respond([{ interactionId, text }])
                         .catch(() => setError("Reply failed. Please retry."));
                   }}
                 >
-                  <label htmlFor={`reply-${request.requestId}`}>Your reply</label>
-                  <input id={`reply-${request.requestId}`} name="reply" required />
+                  <label htmlFor={`reply-${interactionId}`}>Your reply</label>
+                  <input id={`reply-${interactionId}`} name="reply" required />
                   <button>Reply</button>
                 </form>
               )}
